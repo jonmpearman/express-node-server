@@ -4,6 +4,18 @@ import path from 'path';
 import axios from 'axios';
 
 const Datastore = require('nedb');
+const webpush = require('web-push');
+
+const vapidKeys = {
+    publicKey: 'BCRmcs8imlD0rY_nipNYFUmXSIhShnLCiS5Y-u2GVrXttlIjh3CDO1yoNxUjYNay2nk1BsJjA-mdH2VKJWKtHkA',
+    privateKey: 'ZN3oZgt1eym87j80Wz7au0umyz0zxtHbKJXmZdk7OGA'
+};
+
+webpush.setVapidDetails(
+    'mailto:jpearman@sbgtv.com',
+    vapidKeys.publicKey,
+    vapidKeys.privateKey
+);
 
 const app = express();
 const db = new Datastore({filename: 'db/subscriptionIds.db'});
@@ -18,7 +30,6 @@ app.use(function(req, res, next) {
 });
 
 function saveSubscription(subscription) {
-    console.log('LogMe what is this.... ', subscription);
     return new Promise(function(resolve, reject) {
         db.insert(subscription, (err, newDoc) => {
             if (err) {
@@ -70,31 +81,48 @@ app.use('/send', (req, res) => {
 });
 
 app.use('/send-notification', (req, res) => {
-    return getAllSubscriptions().then((docs) => {
-        for (let i = 0; i < docs.length; i++) {
-            const subscriptionId = getSubscriptionId(docs[i].endpoint);
-            const data = {
-                'registration_ids': [`${subscriptionId}`]
-            };
+    return getAllSubscriptions()
+    .then((docs) => {
+        let promiseChain = Promise.resolve();
 
-            return axios({
-                method: 'post',
-                url: 'https://fcm.googleapis.com/fcm/send',
-                headers: {
-                    Authorization: 'key=AAAA_6fc3Dw:APA91bGlmNfD0nHF49RuKJLvl4ltkD62Vo9WCziwcppaD-Tnghvo6i972NfLl_vvXc6jAayV69bruditMbV7Jo88C3jR7UbOom7zCFnliVDnCg0Yoj1QN8vm2Hxm3F25cA5y80anC1aV',
-                    'Content-Type': 'application/json'
-                },
-                data: JSON.stringify(data)
-            })
-            .then(pushResponse => {
-                console.log('What is the response? .... ', pushResponse);
-                if (pushResponse.status === 200) {
-                    res.redirect('/send');
-                }
-            })
-            .catch((err) => {console.log(err.response)});
+        for (let i = 0; i < docs.length; i++) {
+            console.log(docs[i]);
+            promiseChain = promiseChain.then(() => {
+                const data = {
+                    title: req.body.title,
+                    url: req.body.url,
+                    message: req.body.message
+                };
+                return webpush.sendNotification(docs[i], JSON.stringify(data))
+                .then((res) => {
+                    console.log('LogMe what is the response from webpush? .... ', res);
+                })
+                .catch((err) => {
+                    if (err.statusCode === 404 || err.statusCode === 410) {
+                        console.log('Subscription has expired or is no longer valid: ', err);
+                    }
+                    else {
+                        throw err;
+                    }
+                });
+            });
         }
-    });
+        return promiseChain;
+    })
+    .then(() => {
+        res.redirect('/send');
+    })
+    .catch((err) => {
+        res.status(500);
+        res.setHeader('Content-Type', 'application/json');
+        res.send(JSON.stringify({
+          error: {
+            id: 'unable-to-send-messages',
+            message: `We were unable to send messages to all subscriptions : ` +
+              `'${err.message}'`
+          }
+        }));
+    });;
 });
 
 app.get('/', (req, res) => {
