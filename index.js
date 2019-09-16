@@ -29,6 +29,7 @@ app.use(function(req, res, next) {
     next();
 });
 
+// TODO check if entry for subscription is already in DB before inserting
 function saveSubscription(subscription) {
     return new Promise(function(resolve, reject) {
         db.insert(subscription, (err, newDoc) => {
